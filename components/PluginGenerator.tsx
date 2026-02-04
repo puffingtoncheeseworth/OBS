@@ -12,9 +12,9 @@ export const PluginGenerator: React.FC<PluginGeneratorProps> = ({ onClose }) => 
   const manifestCode = `{
   "id": "obsidian-mediscribe",
   "name": "MediScribe Smart Editor",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "minAppVersion": "0.15.0",
-  "description": "Epic EHR style Dot Phrases and F2 Wildcard navigation.",
+  "description": "Epic EHR style Dot Phrases and F2 Wildcard navigation. Supports inserting Obsidian Notes from specific folders.",
   "author": "MediScribe",
   "isDesktopOnly": false
 }`;
@@ -30,7 +30,9 @@ const { Plugin, EditorSuggest, Setting, PluginSettingTab, Notice } = require('ob
 const DEFAULT_SETTINGS = {
     phrases: [
         { id: '1', trigger: 'soap', expansion: 'S: ***\\nO: ***\\nA: ***\\nP: ***', category: 'General' }
-    ]
+    ],
+    includeNotes: true,
+    notesFolder: ''
 };
 
 module.exports = class MediScribePlugin extends Plugin {
@@ -86,7 +88,7 @@ class DotPhraseSuggest extends EditorSuggest {
     onTrigger(cursor, editor, file) {
         const line = editor.getLine(cursor.line);
         const sub = line.substring(0, cursor.ch);
-        const match = sub.match(/\\.([a-zA-Z0-9]*)$/);
+        const match = sub.match(/\\.([a-zA-Z0-9_-]*)$/);
 
         if (match) {
             return {
@@ -100,20 +102,69 @@ class DotPhraseSuggest extends EditorSuggest {
 
     getSuggestions(context) {
         const query = context.query.toLowerCase();
-        return this.plugin.settings.phrases.filter(p => 
-            p.trigger.toLowerCase().startsWith(query)
-        );
+        const suggestions = [];
+
+        // 1. Custom Phrases
+        this.plugin.settings.phrases.forEach(p => {
+            if (p.trigger.toLowerCase().startsWith(query)) {
+                suggestions.push({ type: 'phrase', value: p });
+            }
+        });
+
+        // 2. Obsidian Notes (if enabled)
+        if (this.plugin.settings.includeNotes) {
+            const files = this.app.vault.getMarkdownFiles();
+            const targetFolder = this.plugin.settings.notesFolder.trim();
+
+            files.forEach(file => {
+                // Check folder constraint if set
+                if (targetFolder.length > 0 && !file.path.startsWith(targetFolder)) {
+                    return;
+                }
+
+                // Check if filename matches query
+                if (file.basename.toLowerCase().startsWith(query)) {
+                     suggestions.push({ type: 'note', value: file });
+                }
+            });
+        }
+        
+        return suggestions;
     }
 
-    renderSuggestion(phrase, el) {
-        // Updated: Only showing the trigger name to reduce clutter
-        el.createEl("div", { text: "." + phrase.trigger, cls: "suggestion-content" });
+    renderSuggestion(suggestion, el) {
+        // Layout container
+        const div = el.createEl("div");
+        div.style.display = "flex";
+        div.style.justifyContent = "space-between";
+        div.style.alignItems = "center";
+
+        // Text
+        const text = suggestion.type === 'phrase' 
+            ? "." + suggestion.value.trigger 
+            : "." + suggestion.value.basename;
+            
+        div.createEl("span", { text: text });
+        
+        // Type Badge
+        const typeText = suggestion.type === 'phrase' ? 'Phrase' : 'Note';
+        div.createEl("small", { 
+            text: typeText, 
+            style: "color: var(--text-muted); font-size: 0.8em; margin-left: 10px;" 
+        });
     }
 
-    selectSuggestion(phrase, evt) {
-        if (this.context) {
-            const editor = this.context.editor;
-            editor.replaceRange(phrase.expansion, this.context.start, this.context.end);
+    selectSuggestion(suggestion, evt) {
+        if (!this.context) return;
+        const editor = this.context.editor;
+        
+        if (suggestion.type === 'phrase') {
+             editor.replaceRange(suggestion.value.expansion, this.context.start, this.context.end);
+        } else {
+             // Read the note file asynchronously
+             this.app.vault.read(suggestion.value).then(content => {
+                 editor.replaceRange(content, this.context.start, this.context.end);
+             });
         }
     }
 }
@@ -129,6 +180,35 @@ class MediScribeSettingTab extends PluginSettingTab {
         containerEl.empty();
 
         containerEl.createEl('h2', { text: 'MediScribe Settings' });
+
+        // --- Section: Global Settings ---
+        containerEl.createEl('h3', { text: 'General Options' });
+
+        new Setting(containerEl)
+            .setName('Include Obsidian Notes')
+            .setDesc('When typing a dot phrase, also search for notes in your vault.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.includeNotes)
+                .onChange(async (value) => {
+                    this.plugin.settings.includeNotes = value;
+                    await this.plugin.saveSettings();
+                    this.display(); // Refresh to show/hide folder option
+                }));
+        
+        if (this.plugin.settings.includeNotes) {
+            new Setting(containerEl)
+                .setName('Limit to Folder')
+                .setDesc('Only suggest notes from this folder path (e.g., "Templates/Medical"). Leave empty to search all.')
+                .addText(text => text
+                    .setPlaceholder('Templates')
+                    .setValue(this.plugin.settings.notesFolder)
+                    .onChange(async (value) => {
+                        this.plugin.settings.notesFolder = value;
+                        await this.plugin.saveSettings();
+                    }));
+        }
+        
+        containerEl.createEl('hr');
 
         // --- Section: Add New Phrase ---
         containerEl.createEl('h3', { text: 'Add New Phrase' });
