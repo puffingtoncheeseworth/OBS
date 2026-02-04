@@ -1,0 +1,5 @@
+{
+  "name": "DotPhrase Smart Editor w/ Obsidian Integration ",
+  "description": "A web-based text editor simulating EHR efficiency tools: Dot Phrases for text expansion and F2 navigation for wildcard placeholders (***). Features AI-powered template generation.",
+  "requestFramePermissions": []
+}
